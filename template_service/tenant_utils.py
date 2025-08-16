@@ -11,73 +11,75 @@ from template_service.database_router import set_current_tenant, clear_current_t
 
 def copy_framework_templates_to_tenant(tenant_slug, framework_ids=None):
     """Copy framework templates from main DB to tenant DB"""
-    
     print(f"\n📋 Starting template distribution to {tenant_slug}...")
-    
-    # Get frameworks to copy (all active if not specified)
-    clear_current_tenant()  # Ensure we're reading from main DB
-    
-    if framework_ids:
-        frameworks = Framework.objects.filter(id__in=framework_ids, is_active=True)
-    else:
-        frameworks = Framework.objects.filter(is_active=True)
-    
-    print(f"📦 Found {frameworks.count()} frameworks to copy")
-    
-    # Switch to tenant database for writing
-    set_current_tenant(tenant_slug)
-    
-    copied_frameworks = []
-    
-    for framework in frameworks:
-        print(f"\n🔄 Copying framework: {framework.name} v{framework.version}")
-        
-        try:
-            # Check if framework already exists in tenant DB
-            existing = CompanyFramework.objects.filter(
-                name=framework.name, 
-                version=framework.version
-            ).first()
-            
-            if existing:
-                print(f"   ⚠️  Framework already exists, skipping...")
-                continue
-            
-            # Create company framework
-            company_framework = CompanyFramework.objects.create(
-                name=framework.name,
-                full_name=framework.full_name,
-                version=framework.version,
-                template_framework_id=framework.id,  # Reference to template
-                description=framework.description
-            )
-            
-            print(f"   ✅ Created company framework: {company_framework.name}")
-            
-            # Copy all controls from this framework
-            controls_copied = copy_framework_controls(framework, company_framework)
-            
-            copied_frameworks.append({
-                'framework': company_framework,
-                'controls_copied': controls_copied
-            })
-            
-            print(f"   📊 Copied {controls_copied} controls")
-            
-        except Exception as e:
-            print(f"   ❌ Error copying framework {framework.name}: {e}")
-    
-    # Clear tenant context
+
+    # Always clear to read templates from MAIN
     clear_current_tenant()
-    
+
+    # Read frameworks from MAIN (this is where errors would appear if schema is off)
+# IMPORTANT: distinguish None (copy ALL) vs [] (copy NONE)
+    if framework_ids is None:
+        frameworks = Framework.objects.filter(is_active=True)
+    elif len(framework_ids) == 0:
+        frameworks = Framework.objects.none()
+    else:
+        frameworks = Framework.objects.filter(id__in=framework_ids, is_active=True)
+
+
+    count = frameworks.count()
+    print(f"📦 Found {count} frameworks to copy")
+
+    # Switch to tenant DB to write
+    set_current_tenant(tenant_slug)
+    copied_frameworks = []
+
+    try:
+        for framework in frameworks:
+            print(f"\n🔄 Copying framework: {framework.name} v{framework.version}")
+            
+            try:
+                # Check if framework already exists in tenant DB
+                existing = CompanyFramework.objects.filter(
+                    name=framework.name, 
+                    version=framework.version
+                ).first()
+                
+                if existing:
+                    print(f"   ⚠️  Framework already exists, skipping...")
+                    continue
+                
+                # Create company framework
+                company_framework = CompanyFramework.objects.create(
+                    name=framework.name,
+                    full_name=framework.full_name,
+                    version=framework.version,
+                    template_framework_id=framework.id,  # Reference to template
+                    description=framework.description
+                )
+                
+                print(f"   ✅ Created company framework: {company_framework.name}")
+                
+                # Copy all controls from this framework
+                controls_copied = copy_framework_controls(framework, company_framework)
+                
+                copied_frameworks.append({
+                    'framework': company_framework,
+                    'controls_copied': controls_copied
+                })
+                
+                print(f"   📊 Copied {controls_copied} controls")
+                
+            except Exception as e:
+                print(f"   ❌ Error copying framework {framework.name}: {e}")
+        
+    finally:
+        # Always clear regardless of success/failure
+        clear_current_tenant()
+
     print(f"\n🎉 Template distribution complete!")
-    print(f"   📋 Frameworks copied: {len(copied_frameworks)}")
-    
-    for fw_info in copied_frameworks:
-        fw = fw_info['framework']
-        print(f"   • {fw.name} v{fw.version} ({fw_info['controls_copied']} controls)")
-    
+    ...
     return copied_frameworks
+
 
 
 def copy_framework_controls(template_framework, company_framework):

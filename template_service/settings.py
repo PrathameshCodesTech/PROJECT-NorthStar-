@@ -5,6 +5,14 @@ Django settings for template_service project.
 from pathlib import Path
 from decouple import config
 
+from decouple import config  # or use os.environ.get
+
+INTERNAL_REGISTER_DB_TOKEN = config('INTERNAL_REGISTER_DB_TOKEN', default=None)
+SERVICE1_URL = config('SERVICE1_URL', default='http://localhost:8000')
+SERVICE2_URL = config('SERVICE2_URL', default='http://localhost:8001')
+
+
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
