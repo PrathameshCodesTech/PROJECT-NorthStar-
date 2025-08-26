@@ -5,7 +5,14 @@ Only handles framework template copying, not tenant provisioning
 
 from django.db import connections
 from templates.models import Framework, Domain, Category, Subcategory, Control
-from company_compliance.models import CompanyFramework, CompanyControl
+from company_compliance.models import (
+    CompanyFramework,
+    CompanyDomain,
+    CompanyCategory,
+    CompanySubcategory,
+    CompanyControl,
+)
+
 from template_service.database_router import set_current_tenant, clear_current_tenant, get_current_tenant
 
 
@@ -17,7 +24,7 @@ def copy_framework_templates_to_tenant(tenant_slug, framework_ids=None):
     clear_current_tenant()
 
     # Read frameworks from MAIN (this is where errors would appear if schema is off)
-# IMPORTANT: distinguish None (copy ALL) vs [] (copy NONE)
+    # IMPORTANT: distinguish None (copy ALL) vs [] (copy NONE)
     if framework_ids is None:
         frameworks = Framework.objects.filter(is_active=True)
     elif len(framework_ids) == 0:

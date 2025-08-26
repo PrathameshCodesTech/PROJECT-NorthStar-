@@ -19,4 +19,7 @@ router.register(r'reports', views.ComplianceReportViewSet, basename='compliancer
 
 urlpatterns = [
     path('', include(router.urls)),  
+    path('tenant-users/', views.TenantUserViewSet.as_view({'post': 'create'}), name='create-tenant-user'),
+    path('tenants/<str:tenant_slug>/users/', views.TenantUserViewSet.as_view({'post': 'create'}), name='create-tenant-user-with-slug'),
+    path('tenants/<str:tenant_slug>/invite/', views.TenantUserViewSet.as_view({'post': 'invite_isolated_user'}), name='invite-tenant-user'),
 ]

@@ -13,6 +13,7 @@ from django.conf import settings as django_settings
 
 import requests
 from template_service.tenant_utils import copy_framework_templates_to_tenant
+from hmac import compare_digest
 
 
 class InternalMigrateTenantView(APIView):
@@ -22,10 +23,17 @@ class InternalMigrateTenantView(APIView):
 
     def post(self, request):
         # Verify internal token
-        internal_token = request.headers.get('X-Internal-Token')
-        expected = getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', None)
-        if not expected or internal_token != expected:
+        internal_token = (request.headers.get('X-Internal-Token') or '').strip()
+        expected = (getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip()
+
+        print(f"[INT-CHK] got={repr((request.headers.get('X-Internal-Token') or '').strip())} "
+        f"expected={repr((getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip())}")
+
+        if not expected or not compare_digest(internal_token, expected):
             return Response({'error': 'Unauthorized - Internal API only'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        
+
 
         tenant_slug = request.data.get('tenant_slug')
         connection_name = request.data.get('connection_name')
@@ -75,9 +83,10 @@ class InternalDistributeTemplatesView(APIView):
 
     def post(self, request):
         # Verify internal token
-        internal_token = request.headers.get('X-Internal-Token')
-        expected = getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', None)
-        if not expected or internal_token != expected:
+        internal_token = (request.headers.get('X-Internal-Token') or '').strip()
+        expected = (getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip()
+
+        if not expected or not compare_digest(internal_token, expected):
             return Response({'error': 'Unauthorized - Internal API only'}, status=status.HTTP_401_UNAUTHORIZED)
 
         tenant_slug = request.data.get('tenant_slug')

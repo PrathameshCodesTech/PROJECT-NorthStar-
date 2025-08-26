@@ -27,7 +27,6 @@ class Framework(BaseModel):
     
     name = models.CharField(
         max_length=50, 
-        unique=True,
         help_text="Short name like 'SOX', 'ISO27001'"
     )
     full_name = models.CharField(
@@ -74,10 +73,13 @@ class Domain(BaseModel):
     """Second level - IT General Controls, Application Controls, etc."""
     
     framework = models.ForeignKey(
-        Framework, 
-        on_delete=models.CASCADE, 
+        Framework,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='domains'
     )
+
     name = models.CharField(max_length=100)
     code = models.CharField(
         max_length=10,
@@ -87,33 +89,37 @@ class Domain(BaseModel):
     sort_order = models.PositiveIntegerField(default=1)
     
     class Meta:
-        db_table = 'domains'
-        ordering = ['framework', 'sort_order', 'name']
-        unique_together = ['framework', 'code']
-        # Enforce uniqueness within same framework
-        constraints = [
-            models.UniqueConstraint(
-                fields=['framework', 'code'], 
-                name='unique_domain_code_per_framework'
-            ),
-            models.UniqueConstraint(
-                fields=['framework', 'name'], 
-                name='unique_domain_name_per_framework'
-            )
-        ]
+            db_table = 'domains'
+            ordering = ['framework', 'sort_order', 'name']
+            constraints = [
+                models.UniqueConstraint(
+                    fields=['framework', 'code'],
+                    condition=models.Q(framework__isnull=False),
+                    name='unique_domain_code_per_framework'
+                ),
+                models.UniqueConstraint(
+                    fields=['framework', 'name'],
+                    condition=models.Q(framework__isnull=False),
+                    name='unique_domain_name_per_framework'
+                )
+            ]
         
     def __str__(self):
-        return f"{self.framework.name} - {self.name}"
+        fw_name = self.framework.name if self.framework_id else 'Unlinked'
+        return f"{fw_name} - {self.name}"
 
 
 class Category(BaseModel):
     """Third level - Access Controls, Change Management, etc."""
     
     domain = models.ForeignKey(
-        Domain, 
-        on_delete=models.CASCADE, 
+        Domain,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='categories'
     )
+
     name = models.CharField(max_length=100)
     code = models.CharField(
         max_length=10,
@@ -125,31 +131,38 @@ class Category(BaseModel):
     class Meta:
         db_table = 'categories'
         ordering = ['domain', 'sort_order', 'name']
-        unique_together = ['domain', 'code']
         verbose_name_plural = 'categories'
         constraints = [
             models.UniqueConstraint(
-                fields=['domain', 'code'], 
+                fields=['domain', 'code'],
+                condition=models.Q(domain__isnull=False),
                 name='unique_category_code_per_domain'
             ),
             models.UniqueConstraint(
-                fields=['domain', 'name'], 
+                fields=['domain', 'name'],
+                condition=models.Q(domain__isnull=False),
                 name='unique_category_name_per_domain'
             )
         ]
 
     def __str__(self):
-        return f"{self.domain.framework.name} - {self.name}"
+        dom = self.domain
+        fw_name = dom.framework.name if dom and dom.framework_id else 'Unlinked'
+        return f"{fw_name} - {self.name}"
+
 
 
 class Subcategory(BaseModel):
     """Fourth level - User Access Management, System Monitoring, etc."""
     
     category = models.ForeignKey(
-        Category, 
-        on_delete=models.CASCADE, 
-        related_name='subcategories'
+    Category,
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name='subcategories'
     )
+
     name = models.CharField(max_length=100)
     code = models.CharField(
         max_length=10,
@@ -161,41 +174,50 @@ class Subcategory(BaseModel):
     class Meta:
         db_table = 'subcategories'
         ordering = ['category', 'sort_order', 'name']
-        unique_together = ['category', 'code']
         verbose_name_plural = 'subcategories'
         constraints = [
             models.UniqueConstraint(
-                fields=['category', 'code'], 
+                fields=['category', 'code'],
+                condition=models.Q(category__isnull=False),
                 name='unique_subcategory_code_per_category'
             ),
             models.UniqueConstraint(
-                fields=['category', 'name'], 
+                fields=['category', 'name'],
+                condition=models.Q(category__isnull=False),
                 name='unique_subcategory_name_per_category'
             )
         ]
+
     def __str__(self):
-        return f"{self.category.domain.framework.name} - {self.name}"
+        cat = self.category
+        dom = cat.domain if cat else None
+        fw_name = dom.framework.name if dom and dom.framework_id else 'Unlinked'
+        return f"{fw_name} - {self.name}"
+
 
 
 class Control(BaseModel):
     """Fifth level - Actual controls like AC-001, CM-001, etc."""
     
     subcategory = models.ForeignKey(
-        Subcategory, 
-        on_delete=models.CASCADE, 
-        related_name='controls'
+    Subcategory,
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name='controls'
     )
+
     control_code = models.CharField(
-        max_length=20,
-        unique=True,
-        validators=[
-            RegexValidator(
-                regex=r'^[A-Z]{2,4}-\d{3}$',
-                message='Control code must be like AC-001, CM-001'
-            )
-        ],
-        help_text="Unique control code like 'AC-001'"
+    max_length=20,
+    validators=[
+        RegexValidator(
+            regex=r'^[A-Z]{2,4}-\d{3}$',
+            message='Control code must be like AC-001, CM-001'
+        )
+    ],
+    help_text="Control code like 'AC-001'"
     )
+
     title = models.CharField(max_length=200)
     description = models.TextField()
     objective = models.TextField(
@@ -236,6 +258,14 @@ class Control(BaseModel):
     class Meta:
         db_table = 'controls'
         ordering = ['subcategory', 'sort_order', 'control_code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subcategory', 'control_code'],
+                condition=models.Q(subcategory__isnull=False),
+                name='unique_control_code_per_subcategory'
+            )
+        ]
+
         
     def __str__(self):
         return f"{self.control_code} - {self.title}"

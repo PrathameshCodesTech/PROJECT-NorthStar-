@@ -40,10 +40,28 @@ class ControlDetailSerializer(serializers.ModelSerializer):
     
     assessment_questions = AssessmentQuestionSerializer(many=True, read_only=True)
     evidence_requirements = EvidenceRequirementSerializer(many=True, read_only=True)
-    subcategory_name = serializers.CharField(source='subcategory.name', read_only=True)
-    category_name = serializers.CharField(source='subcategory.category.name', read_only=True)
-    domain_name = serializers.CharField(source='subcategory.category.domain.name', read_only=True)
-    framework_name = serializers.CharField(source='subcategory.category.domain.framework.name', read_only=True)
+    subcategory_name = serializers.SerializerMethodField()
+    category_name = serializers.SerializerMethodField()
+    domain_name = serializers.SerializerMethodField()
+    framework_name = serializers.SerializerMethodField()
+
+    def get_subcategory_name(self, obj):
+        return getattr(obj.subcategory, 'name', None)
+
+    def get_category_name(self, obj):
+        return getattr(getattr(obj.subcategory, 'category', None), 'name', None)
+
+    def get_domain_name(self, obj):
+        cat = getattr(obj.subcategory, 'category', None)
+        dom = getattr(cat, 'domain', None)
+        return getattr(dom, 'name', None)
+
+    def get_framework_name(self, obj):
+        cat = getattr(obj.subcategory, 'category', None)
+        dom = getattr(cat, 'domain', None)
+        fw = getattr(dom, 'framework', None)
+        return getattr(fw, 'name', None)
+
     
     class Meta:
         model = Control
@@ -60,7 +78,10 @@ class ControlDetailSerializer(serializers.ModelSerializer):
 class ControlBasicSerializer(serializers.ModelSerializer):
     """Basic Control serializer for lists"""
     
-    subcategory_name = serializers.CharField(source='subcategory.name', read_only=True)
+    subcategory_name = serializers.SerializerMethodField()
+    def get_subcategory_name(self, obj):
+        return getattr(obj.subcategory, 'name', None)
+
     
     class Meta:
         model = Control
@@ -77,7 +98,10 @@ class SubcategoryDetailSerializer(serializers.ModelSerializer):
     
     controls = ControlBasicSerializer(many=True, read_only=True)
     control_count = serializers.SerializerMethodField()
-    category_name = serializers.CharField(source='category.name', read_only=True)
+    category_name = serializers.SerializerMethodField()
+    def get_category_name(self, obj):
+        return getattr(obj.category, 'name', None)
+
     
     def get_control_count(self, obj):
         return obj.controls.filter(is_active=True).count()
@@ -115,7 +139,10 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
     subcategories = SubcategoryBasicSerializer(many=True, read_only=True)
     subcategory_count = serializers.SerializerMethodField()
     total_controls = serializers.SerializerMethodField()
-    domain_name = serializers.CharField(source='domain.name', read_only=True)
+    domain_name = serializers.SerializerMethodField()
+    def get_domain_name(self, obj):
+        return getattr(obj.domain, 'name', None)
+
     
     def get_subcategory_count(self, obj):
         return obj.subcategories.filter(is_active=True).count()
@@ -160,27 +187,30 @@ class CategoryBasicSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 class DomainCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating domains"""
+    """Serializer for creating domains (framework is optional)"""
+
+    framework = serializers.PrimaryKeyRelatedField(
+        queryset=Framework.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     def validate(self, attrs):
-        """Custom validation for domain uniqueness"""
-        framework = attrs.get('framework')
+        framework = attrs.get('framework', None)
         name = attrs.get('name')
         code = attrs.get('code')
-        
-        # Check if domain with same name exists in same framework
-        if Domain.objects.filter(framework=framework, name=name, is_active=True).exists():
-            raise serializers.ValidationError({
-                'name': f'Domain with name "{name}" already exists in framework "{framework.name}"'
-            })
-        
-        # Check if domain with same code exists in same framework  
-        if Domain.objects.filter(framework=framework, code=code, is_active=True).exists():
-            raise serializers.ValidationError({
-                'code': f'Domain with code "{code}" already exists in framework "{framework.name}"'
-            })
-            
+
+        # Only enforce uniqueness when attached to a framework
+        if framework:
+            if Domain.objects.filter(framework=framework, name=name, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'name': f'Domain with name "{name}" already exists in framework "{framework.name}"'
+                })
+            if Domain.objects.filter(framework=framework, code=code, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'code': f'Domain with code "{code}" already exists in framework "{framework.name}"'
+                })
         return attrs
-    
 
     class Meta:
         model = Domain
@@ -191,29 +221,32 @@ class DomainCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+
 class CategoryCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating categories with validation"""
-    
+    # make domain optional
+    domain = serializers.PrimaryKeyRelatedField(
+        queryset=Domain.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     def validate(self, attrs):
-        """Custom validation for category uniqueness"""
-        domain = attrs.get('domain')
+        domain = attrs.get('domain', None)
         name = attrs.get('name')
         code = attrs.get('code')
-        
-        # Check if category with same name exists in same domain
-        if Category.objects.filter(domain=domain, name=name, is_active=True).exists():
-            raise serializers.ValidationError({
-                'name': f'Category with name "{name}" already exists in domain "{domain.name}"'
-            })
-        
-        # Check if category with same code exists in same domain
-        if Category.objects.filter(domain=domain, code=code, is_active=True).exists():
-            raise serializers.ValidationError({
-                'code': f'Category with code "{code}" already exists in domain "{domain.name}"'
-            })
-            
+
+        # Uniqueness is scoped to the domain when provided
+        if domain:
+            if Category.objects.filter(domain=domain, name=name, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'name': f'Category with name "{name}" already exists in domain "{domain.name}"'
+                })
+            if Category.objects.filter(domain=domain, code=code, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'code': f'Category with code "{code}" already exists in domain "{domain.name}"'
+                })
         return attrs
-    
+
     class Meta:
         model = Category
         fields = [
@@ -230,7 +263,11 @@ class DomainDetailSerializer(serializers.ModelSerializer):
     categories = CategoryBasicSerializer(many=True, read_only=True)
     category_count = serializers.SerializerMethodField()
     total_controls = serializers.SerializerMethodField()
-    framework_name = serializers.CharField(source='framework.name', read_only=True)
+    framework_name = serializers.SerializerMethodField()
+
+    def get_framework_name(self, obj):
+        return getattr(obj.framework, 'name', None)
+
     
     def get_category_count(self, obj):
         return obj.categories.filter(is_active=True).count()
@@ -375,28 +412,29 @@ class FrameworkBasicSerializer(serializers.ModelSerializer):
 
 
 class SubcategoryCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating subcategories with validation"""
-    
+    # make category optional
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     def validate(self, attrs):
-        """Custom validation for subcategory uniqueness"""
-        category = attrs.get('category')
+        category = attrs.get('category', None)
         name = attrs.get('name')
         code = attrs.get('code')
-        
-        # Check if subcategory with same name exists in same category
-        if Subcategory.objects.filter(category=category, name=name, is_active=True).exists():
-            raise serializers.ValidationError({
-                'name': f'Subcategory with name "{name}" already exists in category "{category.name}"'
-            })
-        
-        # Check if subcategory with same code exists in same category
-        if Subcategory.objects.filter(category=category, code=code, is_active=True).exists():
-            raise serializers.ValidationError({
-                'code': f'Subcategory with code "{code}" already exists in category "{category.name}"'
-            })
-            
+
+        if category:
+            if Subcategory.objects.filter(category=category, name=name, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'name': f'Subcategory with name "{name}" already exists in category "{category.name}"'
+                })
+            if Subcategory.objects.filter(category=category, code=code, is_active=True).exists():
+                raise serializers.ValidationError({
+                    'code': f'Subcategory with code "{code}" already exists in category "{category.name}"'
+                })
         return attrs
-    
+
     class Meta:
         model = Subcategory
         fields = [
@@ -405,26 +443,33 @@ class SubcategoryCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+
 class ControlCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating controls with validation"""
-    
+    # make subcategory optional
+    subcategory = serializers.PrimaryKeyRelatedField(
+        queryset=Subcategory.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     def validate(self, attrs):
-        """Custom validation for control uniqueness"""
-        subcategory = attrs.get('subcategory')
+        subcategory = attrs.get('subcategory', None)
         control_code = attrs.get('control_code')
-        
-        # Check if control with same code exists globally (control codes must be unique)
-        if Control.objects.filter(control_code=control_code, is_active=True).exists():
+
+        # If attached, enforce uniqueness within that subcategory
+        if subcategory and Control.objects.filter(
+            subcategory=subcategory, control_code=control_code, is_active=True
+        ).exists():
             raise serializers.ValidationError({
-                'control_code': f'Control with code "{control_code}" already exists'
+                'control_code': f'Control "{control_code}" already exists in this subcategory'
             })
-            
+        # If unattached (subcategory is None): allow duplicates (standalone pool)
         return attrs
-    
+
     class Meta:
         model = Control
         fields = [
-            'id', 'subcategory', 'control_code', 'title', 'description', 
+            'id', 'subcategory', 'control_code', 'title', 'description',
             'objective', 'control_type', 'frequency', 'risk_level', 'sort_order',
             'created_at', 'updated_at', 'is_active'
         ]

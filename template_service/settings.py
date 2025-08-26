@@ -5,7 +5,7 @@ Django settings for template_service project.
 from pathlib import Path
 from decouple import config
 
-from decouple import config  # or use os.environ.get
+
 
 INTERNAL_REGISTER_DB_TOKEN = config('INTERNAL_REGISTER_DB_TOKEN', default=None)
 SERVICE1_URL = config('SERVICE1_URL', default='http://localhost:8000')
@@ -36,6 +36,9 @@ INSTALLED_APPS = [
     # Third party apps
     'rest_framework',
     'corsheaders',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'django_filters',
     
     # Local apps
     'templates',
@@ -85,14 +88,15 @@ WSGI_APPLICATION = 'template_service.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'main_compliance_system_db',
-        'USER': 'postgres',  
-        'PASSWORD': 'root', 
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'ENGINE': config('DB_ENGINE', default='django.db.backends.postgresql'),
+        'NAME':   config('DB_NAME',   default='main_compliance_system_db'),
+        'USER':   config('DB_USER',   default='postgres'),
+        'PASSWORD': config('DB_PASSWORD', default=''),
+        'HOST':   config('DB_HOST',   default='localhost'),
+        'PORT':   config('DB_PORT',   default='5432'),
     }
 }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -125,7 +129,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Django REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',  # For development only
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -138,14 +146,40 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
+# JWT Configuration
+from datetime import timedelta
 
-# CORS settings (for API access from different origins)
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(hours=24),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": config("JWT_SIGNING_KEY", default="dev-only-change-me"),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+SERVICE_TO_SERVICE_TOKEN = config('SERVICE_TO_SERVICE_TOKEN', default='internal-service-secret-token-123')
+
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React frontend
+    "https://app.yourdomain.com",
+    "https://staging.yourdomain.com",
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://localhost:8080",  # Vue frontend
-    "http://127.0.0.1:8080",
 ]
+CSRF_TRUSTED_ORIGINS = [
+    "https://app.yourdomain.com",
+    "https://staging.yourdomain.com",
+]
+CORS_ALLOW_HEADERS = list(set([
+    "authorization",
+    "content-type",
+    "x-internal-token",
+    "x-tenant-slug",
+]))
+CORS_ALLOW_CREDENTIALS = False
+
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only in development
 

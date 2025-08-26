@@ -4,9 +4,11 @@ These models exist in TENANT databases (techcorp_db, microsoft_db, etc.)
 """
 
 from django.db import models
+from django.contrib.auth.models import User
 from django.core.validators import RegexValidator
 from django.utils import timezone
 import uuid
+
 
 class BaseModel(models.Model):
     """Abstract base model with common fields"""
@@ -38,9 +40,122 @@ class CompanyFramework(models.Model):
         return f"{self.name} v{self.version}"
 
 
+class CompanyDomain(models.Model):
+    """Company's copy of domain (customizable)"""
+    framework = models.ForeignKey(
+        CompanyFramework, 
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='domains'
+    )
+    template_domain_id = models.UUIDField()  # References templates.Domain
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=10)
+    description = models.TextField(blank=True)
+    sort_order = models.IntegerField(default=1)
+    
+    # Customization fields
+    is_customized = models.BooleanField(default=False)
+    custom_description = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'company_domains'
+        ordering = ['framework', 'sort_order', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['framework', 'code'],
+                condition=models.Q(framework__isnull=False),
+                name='unique_company_domain_code_per_framework'
+            )
+        ]
+
+    def __str__(self):
+        fw = self.framework.name if self.framework_id else "Unlinked"
+        return f"{fw} - {self.name}"
+
+
+
+class CompanyCategory(models.Model):
+    """Company's copy of category (customizable)"""
+    domain = models.ForeignKey(
+        CompanyDomain,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='categories'
+    )
+    template_category_id = models.UUIDField()  # References templates.Category
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=10)
+    description = models.TextField(blank=True)
+    sort_order = models.IntegerField(default=1)
+    
+    # Customization fields
+    is_customized = models.BooleanField(default=False)
+    custom_description = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'company_categories'
+        ordering = ['domain', 'sort_order', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['domain', 'code'],
+                condition=models.Q(domain__isnull=False),
+                name='unique_company_category_code_per_domain'
+            )
+        ]
+
+    def __str__(self):
+        dom = self.domain
+        fw = dom.framework.name if (dom and dom.framework_id) else "Unlinked"
+        return f"{fw} - {self.name}"
+
+
+
+class CompanySubcategory(models.Model):
+    """Company's copy of subcategory (customizable)"""
+    category = models.ForeignKey(
+        CompanyCategory,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='subcategories'
+    )
+    template_subcategory_id = models.UUIDField()  # References templates.Subcategory
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=10)
+    description = models.TextField(blank=True)
+    sort_order = models.IntegerField(default=1)
+    
+    # Customization fields
+    is_customized = models.BooleanField(default=False)
+    custom_description = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'company_subcategories'
+        ordering = ['category', 'sort_order', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['category', 'code'],
+                condition=models.Q(category__isnull=False),
+                name='unique_company_subcategory_code_per_category'
+            )
+        ]
+
+    def __str__(self):
+        cat = self.category
+        dom = cat.domain if cat else None
+        fw = dom.framework.name if (dom and dom.framework_id) else "Unlinked"
+        return f"{fw} - {self.name}"
+
+
+
 class CompanyControl(models.Model):
     """Company's copy of control (customizable)"""
-    framework = models.ForeignKey(CompanyFramework, on_delete=models.CASCADE, related_name='controls')
+    subcategory = models.ForeignKey(
+        CompanySubcategory, 
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='controls'
+    )
     control_code = models.CharField(max_length=20)  # "AC-001"
     title = models.CharField(max_length=200)
     description = models.TextField()
@@ -48,7 +163,6 @@ class CompanyControl(models.Model):
     
     # Reference to original template
     template_control_id = models.UUIDField()  # References templates.Control
-    
     # Customization fields
     is_customized = models.BooleanField(default=False)
     custom_description = models.TextField(blank=True)
@@ -82,8 +196,14 @@ class CompanyControl(models.Model):
     
     class Meta:
         db_table = 'company_controls'
-        ordering = ['framework', 'sort_order', 'control_code']
-        unique_together = ['framework', 'control_code']
+        ordering = ['subcategory', 'sort_order', 'control_code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subcategory', 'control_code'],
+                condition=models.Q(subcategory__isnull=False),
+                name='unique_company_control_code_per_subcategory'
+            )
+        ]
 
     def __str__(self):
         return f"{self.control_code} - {self.title}"
@@ -92,6 +212,11 @@ class CompanyControl(models.Model):
 class ControlAssignment(models.Model):
     """Assignment of control to employee"""
     control = models.ForeignKey(CompanyControl, on_delete=models.CASCADE, related_name='assignments')
+    
+    @property 
+    def framework(self):
+        """Helper property to get framework through hierarchy"""
+        return self.control.subcategory.category.domain.framework
     
     # Employee references (external system IDs)
     assigned_to_employee_id = models.IntegerField()  # References external HR system
@@ -298,3 +423,27 @@ class ComplianceReport(models.Model):
 
     def __str__(self):
         return f"{self.report_name} - {self.generated_date.strftime('%Y-%m-%d')}"
+    
+    
+class TenantUser(models.Model):
+    """Tenant-specific user storage for ISOLATED residency mode"""
+    
+    ROLE_CHOICES = [
+        ('TENANT_ADMIN', 'Tenant Admin'),
+        ('COMPLIANCE_MANAGER', 'Compliance Manager'),
+        ('AUDITOR', 'Auditor'),
+        ('EMPLOYEE', 'Employee'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField()
+    password_hash = models.CharField(max_length=128)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='EMPLOYEE')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    last_login = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'tenant_users'
+        ordering = ['username']

@@ -1,12 +1,15 @@
 """
 API Views for Company Compliance Service
 """
-
 from rest_framework import viewsets, status, filters
+from rest_framework.permissions import IsAuthenticated
+from .permissions import IsTenantMember, IsTenantAdmin, CanAssignControls, IsOwnerOrTenantAdmin
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q, Count
+import requests
+from django.conf import settings
 
 from .models import (
     CompanyFramework, CompanyControl, ControlAssignment,
@@ -20,14 +23,18 @@ from .serializers import (
     EvidenceDocumentSerializer, RemediationPlanSerializer,
     ComplianceReportSerializer
 )
-
+from .permissions import CanCreateUsers, IsTenantMember
+from template_service.database_router import get_current_tenant
+from .permissions import validate_role_creation
 
 class CompanyFrameworkViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Company Frameworks
+    REQUIRES AUTHENTICATION
     """
     queryset = CompanyFramework.objects.all()
     serializer_class = CompanyFrameworkSerializer
+    permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['name', 'version', 'is_customized']
     search_fields = ['name', 'full_name', 'description']
@@ -68,6 +75,7 @@ class CompanyControlViewSet(viewsets.ModelViewSet):
     ViewSet for managing Company Controls
     """
     queryset = CompanyControl.objects.filter(is_active=True)
+    permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['framework', 'control_type', 'frequency', 'risk_level', 'is_customized']
     search_fields = ['control_code', 'title', 'description', 'objective']
@@ -107,6 +115,7 @@ class ControlAssignmentViewSet(viewsets.ModelViewSet):
     """
     queryset = ControlAssignment.objects.all()
     serializer_class = ControlAssignmentSerializer
+    permission_classes = [IsTenantMember, IsOwnerOrTenantAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['control', 'assigned_to_employee_id', 'status', 'priority']
     search_fields = ['control__control_code', 'control__title', 'notes']
@@ -152,6 +161,7 @@ class AssessmentCampaignViewSet(viewsets.ModelViewSet):
     """
     queryset = AssessmentCampaign.objects.all()
     serializer_class = AssessmentCampaignSerializer
+    permission_classes = [IsTenantAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['framework', 'status', 'created_by_employee_id']
     search_fields = ['campaign_name', 'description']
@@ -173,6 +183,7 @@ class AssessmentResponseViewSet(viewsets.ModelViewSet):
     """
     queryset = AssessmentResponse.objects.all()
     serializer_class = AssessmentResponseSerializer
+    permission_classes = [IsTenantMember, IsOwnerOrTenantAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['assignment', 'campaign', 'answered_by_employee_id', 'confidence_level']
     search_fields = ['question_text', 'answer', 'comments']
@@ -186,6 +197,7 @@ class EvidenceDocumentViewSet(viewsets.ModelViewSet):
     """
     queryset = EvidenceDocument.objects.all()
     serializer_class = EvidenceDocumentSerializer
+    permission_classes = [IsTenantMember, IsOwnerOrTenantAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['assignment', 'status', 'file_type', 'uploaded_by_employee_id']
     search_fields = ['document_name', 'original_filename']
@@ -221,6 +233,7 @@ class RemediationPlanViewSet(viewsets.ModelViewSet):
     """
     queryset = RemediationPlan.objects.all()
     serializer_class = RemediationPlanSerializer
+    permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['assignment', 'status', 'priority', 'assigned_to_employee_id']
     search_fields = ['gap_description', 'remediation_steps']
@@ -234,8 +247,99 @@ class ComplianceReportViewSet(viewsets.ModelViewSet):
     """
     queryset = ComplianceReport.objects.all()
     serializer_class = ComplianceReportSerializer
+    permission_classes = [IsTenantAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['framework', 'campaign', 'report_type', 'generated_by_employee_id']
     search_fields = ['report_name']
     ordering_fields = ['generated_date', 'overall_compliance_rate']
     ordering = ['-generated_date']
+
+
+def create_isolated_user(self, data, tenant_slug):
+    """Create user in tenant database for isolated mode"""
+    try:
+        from .models import TenantUser
+        from django.contrib.auth.hashers import make_password
+        from template_service.database_router import set_current_tenant, clear_current_tenant
+        
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        role = data.get('role', 'EMPLOYEE')
+        
+        if not all([username, email, password]):
+            return Response({'error': 'Missing required fields'}, status=400)
+        
+        # Set tenant context for database routing
+        set_current_tenant(tenant_slug)
+        
+        try:
+            # Check if user already exists in tenant database
+            if TenantUser.objects.filter(username=username).exists():
+                return Response({'error': 'Username already exists'}, status=400)
+            
+            if TenantUser.objects.filter(email=email).exists():
+                return Response({'error': 'Email already exists'}, status=400)
+            
+            # Create tenant user
+            tenant_user = TenantUser.objects.create(
+                username=username,
+                email=email,
+                password_hash=make_password(password),
+                role=role,
+                is_active=True
+            )
+            
+            return Response({
+                'success': True,
+                'user': {
+                    'id': str(tenant_user.id),
+                    'username': tenant_user.username,
+                    'email': tenant_user.email,
+                    'role': tenant_user.role,
+                    'tenant_slug': tenant_slug
+                }
+            }, status=201)
+            
+        finally:
+            clear_current_tenant()
+            
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+def get_tenant_info(self, tenant_slug):
+    """Get tenant information from Service 2"""
+    try:
+        response = requests.get(
+            f'{settings.SERVICE2_URL}/api/v2/internal/tenants/{tenant_slug}/residency/',
+            headers={'X-Internal-Token': settings.SERVICE_TO_SERVICE_TOKEN},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception:
+        return None
+
+class TenantUserViewSet(viewsets.ViewSet):
+    """Handle user creation for ISOLATED mode"""
+    permission_classes = [IsTenantMember, CanCreateUsers]
+    
+    def create(self, request):
+        """Create user in isolated tenant database"""
+        tenant_slug = get_current_tenant()
+        
+        # Verify tenant uses isolated mode
+        tenant_info = self.get_tenant_info(tenant_slug)
+        if tenant_info.get('user_data_residency') != 'ISOLATED':
+            return Response({'error': 'This tenant uses centralized user management'}, status=400)
+        
+        # Validate role assignment
+        creator_role = request.tenant_membership.get('role')
+        target_role = request.data.get('role', 'EMPLOYEE')
+        
+        if not validate_role_creation(creator_role, target_role):
+            return Response({'error': f'Cannot assign role {target_role}'}, status=403)
+        
+        return self.create_isolated_user(request.data, tenant_slug)
