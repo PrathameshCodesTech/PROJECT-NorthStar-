@@ -5,30 +5,77 @@ Automatically routes queries to correct tenant database based on context
 
 from django.conf import settings
 import threading
+import contextlib
+from contextvars import ContextVar
+import logging
 
-# Thread-local storage for current tenant context
+logger = logging.getLogger(__name__)
+
+# Use ContextVar for async-safe tenant context
+_tenant_context: ContextVar[str] = ContextVar('tenant_context', default=None)
+
+# Fallback thread-local for backwards compatibility
 _thread_locals = threading.local()
 
 
 def get_current_tenant():
-    """Get current tenant from thread-local storage"""
+    """Get current tenant from context (async-safe)"""
+    # Try ContextVar first (async-safe)
+    tenant = _tenant_context.get(None)
+    if tenant:
+        return tenant
+    
+    # Fallback to thread-local
     return getattr(_thread_locals, 'tenant', None)
 
 
 def set_current_tenant(tenant_slug):
-    """Set current tenant in thread-local storage"""
-    _thread_locals.tenant = tenant_slug
+    """Set current tenant in context (async-safe)"""
+    if tenant_slug:
+        # Validate tenant_slug format
+        import re
+        if not re.match(r'^[a-z0-9-]{3,50}$', tenant_slug):
+            logger.warning(f"Invalid tenant_slug format: {tenant_slug}")
+            return False
+        
+        _tenant_context.set(tenant_slug)
+        _thread_locals.tenant = tenant_slug  # Fallback
+        logger.debug(f"Set tenant context: {tenant_slug}")
+        return True
+    return False
 
 
 def clear_current_tenant():
-    """Clear current tenant from thread-local storage"""
+    """Clear current tenant from context (async-safe)"""
+    current = get_current_tenant()
+    if current:
+        logger.debug(f"Clearing tenant context: {current}")
+    
+    _tenant_context.set(None)
     if hasattr(_thread_locals, 'tenant'):
         delattr(_thread_locals, 'tenant')
 
 
+@contextlib.contextmanager
+def tenant_context(tenant_slug):
+    """Context manager for safe tenant switching"""
+    previous_tenant = get_current_tenant()
+    if set_current_tenant(tenant_slug):
+        try:
+            yield tenant_slug
+        finally:
+            if previous_tenant:
+                set_current_tenant(previous_tenant)
+            else:
+                clear_current_tenant()
+    else:
+        # Invalid tenant_slug, don't switch context
+        yield None
+
+
 class ComplianceRouter:
     """
-    Database router for multi-tenant compliance system
+    Database router for multi-tenant compliance system with context validation
     
     Routing Rules:
     - templates app models → main database (default)
@@ -37,7 +84,7 @@ class ComplianceRouter:
     """
     
     def db_for_read(self, model, **hints):
-        """Determine which database to read from"""
+        """Determine which database to read from with validation"""
         
         # Templates app always uses main database
         if model._meta.app_label == 'templates':
@@ -47,8 +94,18 @@ class ComplianceRouter:
         if model._meta.app_label == 'company_compliance':
             tenant = get_current_tenant()
             if tenant:
-                return f"{tenant}_compliance_db"
-            # Fallback to default if no tenant context
+                connection_name = f"{tenant}_compliance_db"
+                
+                # Validate that the database connection exists
+                from django.db import connections
+                if connection_name in connections.databases:
+                    return connection_name
+                else:
+                    logger.warning(f"Tenant database {connection_name} not found, falling back to default")
+                    return 'default'
+            
+            # No tenant context - this might be a problem
+            logger.warning(f"No tenant context for company_compliance model: {model.__name__}")
             return 'default'
         
         # Everything else uses main database

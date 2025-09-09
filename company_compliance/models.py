@@ -31,6 +31,8 @@ class CompanyFramework(models.Model):
     customized_date = models.DateTimeField(null=True, blank=True)
     activated_date = models.DateTimeField(auto_now_add=True)
     description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
 
     class Meta:
         db_table = 'company_frameworks'
@@ -57,6 +59,9 @@ class CompanyDomain(models.Model):
     # Customization fields
     is_customized = models.BooleanField(default=False)
     custom_description = models.TextField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'company_domains'
@@ -92,6 +97,9 @@ class CompanyCategory(models.Model):
     # Customization fields
     is_customized = models.BooleanField(default=False)
     custom_description = models.TextField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'company_categories'
@@ -128,6 +136,9 @@ class CompanySubcategory(models.Model):
     # Customization fields
     is_customized = models.BooleanField(default=False)
     custom_description = models.TextField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'company_subcategories'
@@ -193,6 +204,8 @@ class CompanyControl(models.Model):
     
     is_active = models.BooleanField(default=True)
     sort_order = models.IntegerField(default=1)
+  
+
     
     class Meta:
         db_table = 'company_controls'
@@ -243,6 +256,8 @@ class ControlAssignment(models.Model):
     ], default='MEDIUM')
     
     notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'control_assignments'
@@ -260,6 +275,9 @@ class AssessmentCampaign(models.Model):
     
     start_date = models.DateField()
     end_date = models.DateField()
+
+    is_active = models.BooleanField(default=True)
+
     
     status = models.CharField(max_length=20, choices=[
         ('PLANNING', 'Planning'),
@@ -302,6 +320,8 @@ class AssessmentResponse(models.Model):
     ], default='MEDIUM')
     
     comments = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'assessment_responses'
@@ -339,6 +359,9 @@ class EvidenceDocument(models.Model):
     reviewed_by_employee_id = models.IntegerField(null=True, blank=True)
     review_date = models.DateTimeField(null=True, blank=True)
     review_comments = models.TextField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'evidence_documents'
@@ -381,6 +404,9 @@ class RemediationPlan(models.Model):
     assigned_to_employee_id = models.IntegerField()
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
+
+    is_active = models.BooleanField(default=True)
+
     
     class Meta:
         db_table = 'remediation_plans'
@@ -412,6 +438,9 @@ class ComplianceReport(models.Model):
     overall_compliance_rate = models.DecimalField(max_digits=5, decimal_places=2)
     total_controls = models.IntegerField()
     completed_controls = models.IntegerField()
+
+    is_active = models.BooleanField(default=True)
+
     
     # Report content
     report_data = models.JSONField()  # Detailed report data

@@ -13,7 +13,22 @@ from django.conf import settings as django_settings
 
 import requests
 from template_service.tenant_utils import copy_framework_templates_to_tenant
-from hmac import compare_digest
+import hmac
+import hashlib
+
+def secure_token_compare(provided_token, expected_token):
+    """Secure token comparison resistant to timing attacks"""
+    if not expected_token:
+        return False
+    
+    # Normalize tokens to bytes
+    if isinstance(provided_token, str):
+        provided_token = provided_token.encode('utf-8')
+    if isinstance(expected_token, str):
+        expected_token = expected_token.encode('utf-8')
+    
+    # Use HMAC for constant-time comparison
+    return hmac.compare_digest(provided_token, expected_token)
 
 
 class InternalMigrateTenantView(APIView):
@@ -23,28 +38,33 @@ class InternalMigrateTenantView(APIView):
 
     def post(self, request):
         # Verify internal token
-        internal_token = (request.headers.get('X-Internal-Token') or '').strip()
-        expected = (getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip()
+        # Verify internal token with secure comparison
+        internal_token = request.headers.get('X-Internal-Token', '')
+        expected = getattr(django_settings, 'SERVICE_TO_SERVICE_TOKEN', '')
 
-        print(f"[INT-CHK] got={repr((request.headers.get('X-Internal-Token') or '').strip())} "
-        f"expected={repr((getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip())}")
-
-        if not expected or not compare_digest(internal_token, expected):
-            return Response({'error': 'Unauthorized - Internal API only'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not secure_token_compare(internal_token, expected):
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         
 
 
-        tenant_slug = request.data.get('tenant_slug')
-        connection_name = request.data.get('connection_name')
+        tenant_slug = request.data.get('tenant_slug', '').strip()
+        connection_name = request.data.get('connection_name', '').strip()
+        
+        # Validate tenant_slug format
         if not tenant_slug or not connection_name:
             return Response({'error': 'tenant_slug and connection_name required'}, status=status.HTTP_400_BAD_REQUEST)
-
+        
+        # Basic tenant_slug validation (alphanumeric and hyphens only)
+        import re
+        if not re.match(r'^[a-z0-9-]{3,50}$', tenant_slug):
+            return Response({'error': 'Invalid tenant_slug format'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
             # Get tenant database credentials from Service 2
             response = requests.get(
                 f'http://localhost:8001/api/v2/internal/tenants/{tenant_slug}/credentials/',
-                headers={'X-Internal-Token': django_settings.INTERNAL_REGISTER_DB_TOKEN},
+                headers={'X-Internal-Token': django_settings.SERVICE_TO_SERVICE_TOKEN},
                 timeout=10
             )
             if response.status_code != 200:
@@ -83,22 +103,29 @@ class InternalDistributeTemplatesView(APIView):
 
     def post(self, request):
         # Verify internal token
-        internal_token = (request.headers.get('X-Internal-Token') or '').strip()
-        expected = (getattr(django_settings, 'INTERNAL_REGISTER_DB_TOKEN', '') or '').strip()
+        # Verify internal token with secure comparison
+        internal_token = request.headers.get('X-Internal-Token', '')
+        expected = getattr(django_settings, 'SERVICE_TO_SERVICE_TOKEN', '')
 
-        if not expected or not compare_digest(internal_token, expected):
-            return Response({'error': 'Unauthorized - Internal API only'}, status=status.HTTP_401_UNAUTHORIZED)
-
-        tenant_slug = request.data.get('tenant_slug')
+        if not secure_token_compare(internal_token, expected):
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        tenant_slug = request.data.get('tenant_slug', '').strip()
         framework_ids = request.data.get('framework_ids')
+        
         if not tenant_slug:
             return Response({'error': 'tenant_slug required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Basic tenant_slug validation (alphanumeric and hyphens only)
+        import re
+        if not re.match(r'^[a-z0-9-]{3,50}$', tenant_slug):
+            return Response({'error': 'Invalid tenant_slug format'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             # Get tenant database credentials from Service 2
             response = requests.get(
                 f'http://localhost:8001/api/v2/internal/tenants/{tenant_slug}/credentials/',
-                headers={'X-Internal-Token': django_settings.INTERNAL_REGISTER_DB_TOKEN},
+                headers={'X-Internal-Token': django_settings.SERVICE_TO_SERVICE_TOKEN},
                 timeout=10
             )
             if response.status_code != 200:

@@ -9,6 +9,9 @@ from . import views
 # Create router and register viewsets
 router = DefaultRouter()
 router.register(r'frameworks', views.CompanyFrameworkViewSet, basename='companyframework')
+router.register(r'domains', views.CompanyDomainViewSet, basename='companydomain')
+router.register(r'categories', views.CompanyCategoryViewSet, basename='companycategory')
+router.register(r'subcategories', views.CompanySubcategoryViewSet, basename='companysubcategory')
 router.register(r'controls', views.CompanyControlViewSet, basename='companycontrol')
 router.register(r'assignments', views.ControlAssignmentViewSet, basename='controlassignment')
 router.register(r'campaigns', views.AssessmentCampaignViewSet, basename='assessmentcampaign')

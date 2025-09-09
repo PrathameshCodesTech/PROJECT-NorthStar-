@@ -40,27 +40,59 @@ class ControlDetailSerializer(serializers.ModelSerializer):
     
     assessment_questions = AssessmentQuestionSerializer(many=True, read_only=True)
     evidence_requirements = EvidenceRequirementSerializer(many=True, read_only=True)
+    subcategory_id = serializers.SerializerMethodField()
     subcategory_name = serializers.SerializerMethodField()
+    category_id = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
+    domain_id = serializers.SerializerMethodField()
     domain_name = serializers.SerializerMethodField()
+    framework_id = serializers.SerializerMethodField()
     framework_name = serializers.SerializerMethodField()
 
+
+    def _cat(self, obj):
+        return getattr(obj.subcategory, 'category', None)
+
+    def _dom(self, obj):
+        cat = self._cat(obj)
+        return getattr(cat, 'domain', None)
+
+    def _fw(self, obj):
+        dom = self._dom(obj)
+        return getattr(dom, 'framework', None)
+    
+    def get_subcategory_id(self, obj):
+        sub = getattr(obj, 'subcategory', None)
+        return getattr(sub, 'id', None)
+
     def get_subcategory_name(self, obj):
-        return getattr(obj.subcategory, 'name', None)
+        sub = getattr(obj, 'subcategory', None)
+        return getattr(sub, 'name', None)
+
+    def get_category_id(self, obj):
+        cat = self._cat(obj)
+        return getattr(cat, 'id', None)
 
     def get_category_name(self, obj):
-        return getattr(getattr(obj.subcategory, 'category', None), 'name', None)
+        cat = self._cat(obj)
+        return getattr(cat, 'name', None)
+
+    def get_domain_id(self, obj):
+        dom = self._dom(obj)
+        return getattr(dom, 'id', None)
 
     def get_domain_name(self, obj):
-        cat = getattr(obj.subcategory, 'category', None)
-        dom = getattr(cat, 'domain', None)
+        dom = self._dom(obj)
         return getattr(dom, 'name', None)
 
+    def get_framework_id(self, obj):
+        fw = self._fw(obj)
+        return getattr(fw, 'id', None)
+
     def get_framework_name(self, obj):
-        cat = getattr(obj.subcategory, 'category', None)
-        dom = getattr(cat, 'domain', None)
-        fw = getattr(dom, 'framework', None)
+        fw = self._fw(obj)
         return getattr(fw, 'name', None)
+
 
     
     class Meta:
@@ -68,7 +100,11 @@ class ControlDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'control_code', 'title', 'description', 'objective',
             'control_type', 'frequency', 'risk_level', 'sort_order',
-            'framework_name', 'domain_name', 'category_name', 'subcategory_name',
+            # NEW fields you asked for:
+            'framework_id', 'framework_name',
+            'domain_id', 'domain_name',
+            'category_id', 'category_name',
+            'subcategory_id', 'subcategory_name',
             'assessment_questions', 'evidence_requirements',
             'created_at', 'updated_at', 'is_active'
         ]
@@ -98,7 +134,20 @@ class SubcategoryDetailSerializer(serializers.ModelSerializer):
     
     controls = ControlBasicSerializer(many=True, read_only=True)
     control_count = serializers.SerializerMethodField()
-    category_name = serializers.SerializerMethodField()
+
+
+
+    # ✅ category info
+    category_id = serializers.UUIDField(read_only=True)                         # model column `category_id`
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+
+    # ✅ domain info (via category → domain)
+    domain_id = serializers.SerializerMethodField()
+    domain_name = serializers.SerializerMethodField()
+
+    # ✅ framework info (via category → domain → framework)
+    framework_id = serializers.SerializerMethodField()
+    framework_name = serializers.SerializerMethodField()
     def get_category_name(self, obj):
         return getattr(obj.category, 'name', None)
 
@@ -110,11 +159,35 @@ class SubcategoryDetailSerializer(serializers.ModelSerializer):
         model = Subcategory
         fields = [
             'id', 'name', 'code', 'description', 'sort_order',
-            'category_name', 'control_count', 'controls',
+             # category linkage
+            'category_id', 'category_name',
+            # domain linkage
+            'domain_id', 'domain_name',
+            # framework linkage
+            'framework_id', 'framework_name',
+            'control_count', 'controls',
             'created_at', 'updated_at', 'is_active'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def get_domain_id(self, obj):
+        # category can be None; domain can be None
+        return getattr(obj.category, 'domain_id', None) if obj.category else None
+
+    def get_domain_name(self, obj):
+        if not obj.category or not obj.category.domain:
+            return None
+        return obj.category.domain.name
+
+    def get_framework_id(self, obj):
+        if not obj.category or not obj.category.domain:
+            return None
+        return getattr(obj.category.domain, 'framework_id', None)
+
+    def get_framework_name(self, obj):
+        if not obj.category or not obj.category.domain or not obj.category.domain.framework:
+            return None
+        return obj.category.domain.framework.name
 
 class SubcategoryBasicSerializer(serializers.ModelSerializer):
     """Basic Subcategory serializer for lists"""
@@ -140,6 +213,9 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
     subcategory_count = serializers.SerializerMethodField()
     total_controls = serializers.SerializerMethodField()
     domain_name = serializers.SerializerMethodField()
+    domain_id = serializers.UUIDField(read_only=True)
+    framework_id = serializers.SerializerMethodField()
+    framework_name = serializers.SerializerMethodField()
     def get_domain_name(self, obj):
         return getattr(obj.domain, 'name', None)
 
@@ -156,11 +232,20 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = [
-            'id', 'name', 'code', 'description', 'sort_order',
+            'id', 'name', 'code', 'description', 'sort_order','framework_id', 'framework_name', 'domain_id',
             'domain_name', 'subcategory_count', 'total_controls',
             'subcategories', 'created_at', 'updated_at', 'is_active'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_framework_id(self, obj):
+        # obj.domain may be None
+        return getattr(obj.domain, 'framework_id', None) if obj.domain else None
+
+    def get_framework_name(self, obj):
+        if not obj.domain or not obj.domain.framework:
+            return None
+        return obj.domain.framework.name
 
 
 class CategoryBasicSerializer(serializers.ModelSerializer):
@@ -474,3 +559,149 @@ class ControlCreateSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'is_active'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+# serializers.py (templates app)
+
+class AssessmentQuestionMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssessmentQuestion
+        fields = ['id', 'question', 'question_type', 'is_mandatory', 'sort_order']
+
+class EvidenceRequirementMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EvidenceRequirement
+        fields = ['id', 'title', 'evidence_type', 'is_mandatory', 'file_format']
+
+class ControlNestedSerializer(serializers.ModelSerializer):
+    assessment_questions = AssessmentQuestionMiniSerializer(many=True, read_only=True)
+    evidence_requirements = EvidenceRequirementMiniSerializer(many=True, read_only=True)
+
+    # chain context (safe if something is null)
+    subcategory_id   = serializers.SerializerMethodField()
+    subcategory_name = serializers.SerializerMethodField()
+    category_id      = serializers.SerializerMethodField()
+    category_name    = serializers.SerializerMethodField()
+    domain_id        = serializers.SerializerMethodField()
+    domain_name      = serializers.SerializerMethodField()
+    framework_id     = serializers.SerializerMethodField()
+    framework_name   = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Control
+        fields = [
+            'id','control_code','title','description','objective',
+            'control_type','frequency','risk_level','sort_order',
+            'subcategory_id','subcategory_name',
+            'category_id','category_name',
+            'domain_id','domain_name',
+            'framework_id','framework_name',
+            'assessment_questions','evidence_requirements',
+            'created_at','updated_at','is_active'
+        ]
+
+    def _cat(self, obj): return getattr(obj.subcategory, 'category', None)
+    def _dom(self, obj): 
+        cat = self._cat(obj); return getattr(cat, 'domain', None) if cat else None
+    def _fw(self, obj):
+        dom = self._dom(obj); return getattr(dom, 'framework', None) if dom else None
+
+    def get_subcategory_id(self, obj):   return getattr(obj.subcategory, 'id', None)
+    def get_subcategory_name(self, obj): return getattr(obj.subcategory, 'name', None)
+    def get_category_id(self, obj):      return getattr(self._cat(obj), 'id', None)
+    def get_category_name(self, obj):    return getattr(self._cat(obj), 'name', None)
+    def get_domain_id(self, obj):        return getattr(self._dom(obj), 'id', None)
+    def get_domain_name(self, obj):      return getattr(self._dom(obj), 'name', None)
+    def get_framework_id(self, obj):     return getattr(self._fw(obj), 'id', None)
+    def get_framework_name(self, obj):   return getattr(self._fw(obj), 'name', None)
+
+class SubcategoryNestedSerializer(serializers.ModelSerializer):
+    # assumes Control has related_name='controls'
+    controls = ControlNestedSerializer(many=True, read_only=True)
+    class Meta:
+        model = Subcategory
+        fields = ['id','name','code','description','sort_order','controls','created_at','updated_at','is_active']
+
+class CategoryNestedSerializer(serializers.ModelSerializer):
+    # assumes Subcategory has related_name='subcategories'
+    subcategories = SubcategoryNestedSerializer(many=True, read_only=True)
+    domain_id      = serializers.UUIDField(read_only=True)
+    domain_name    = serializers.CharField(source='domain.name', read_only=True)
+    framework_id   = serializers.SerializerMethodField()
+    framework_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Category
+        fields = [
+            'id','name','code','description','sort_order',
+            'domain_id','domain_name','framework_id','framework_name',
+            'subcategories','created_at','updated_at','is_active'
+        ]
+
+    def get_framework_id(self, obj):
+        dom = getattr(obj, 'domain', None)
+        fw = getattr(dom, 'framework', None) if dom else None
+        return getattr(fw, 'id', None)
+
+    def get_framework_name(self, obj):
+        dom = getattr(obj, 'domain', None)
+        fw = getattr(dom, 'framework', None) if dom else None
+        return getattr(fw, 'name', None)
+
+class DomainNestedSerializer(serializers.ModelSerializer):
+    # assumes Category has related_name='categories'
+    categories = CategoryNestedSerializer(many=True, read_only=True)
+    category_count = serializers.SerializerMethodField()   # ← add
+    total_controls = serializers.SerializerMethodField()   # ← add
+
+    class Meta:
+        model = Domain
+        fields = ['id','name','code','description','sort_order','category_count','total_controls','categories','is_active']
+
+    def get_category_count(self, obj):
+        return obj.categories.filter(is_active=True).count()
+
+    def get_total_controls(self, obj):
+        return sum(
+            sum(sc.controls.filter(is_active=True).count()
+                for sc in c.subcategories.filter(is_active=True))
+            for c in obj.categories.filter(is_active=True)
+        )
+
+
+
+class FrameworkDeepSerializer(serializers.ModelSerializer):
+    domains = DomainNestedSerializer(many=True, read_only=True)
+    stats = serializers.SerializerMethodField()   # ← add this
+
+    class Meta:
+        model = Framework
+        fields = [
+            'id','name','full_name','description','version','effective_date','status',
+            'stats','domains','created_at','updated_at','is_active'
+        ]
+
+    def get_stats(self, obj):
+        # Uses same logic as your view’s /stats action
+        domains = obj.domains.filter(is_active=True)
+        return {
+            'domain_count': domains.count(),
+            'category_count': sum(
+                d.categories.filter(is_active=True).count()
+                for d in domains
+            ),
+            'subcategory_count': sum(
+                sum(c.subcategories.filter(is_active=True).count()
+                    for c in d.categories.filter(is_active=True))
+                for d in domains
+            ),
+            'control_count': sum(
+                sum(
+                    sum(sc.controls.filter(is_active=True).count()
+                        for sc in c.subcategories.filter(is_active=True))
+                    for c in d.categories.filter(is_active=True)
+                )
+                for d in domains
+            ),
+        }
+

@@ -4,7 +4,9 @@ API Views for Template Service
 
 from rest_framework import viewsets, status, filters
 from rest_framework.permissions import IsAuthenticated
-from .permissions import IsSuperAdminUser, IsAdminOrReadOnly
+from template_service.permissions import IsSuperAdminUser
+from .permissions import IsSuperAdminUser, IsAdminOrReadOnly    
+from django.db.models import Prefetch    
 
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -21,7 +23,7 @@ from .serializers import (
     CategoryDetailSerializer, CategoryBasicSerializer,
     SubcategoryDetailSerializer, SubcategoryBasicSerializer,
     ControlDetailSerializer, ControlBasicSerializer, CategoryCreateSerializer,
-    AssessmentQuestionSerializer, EvidenceRequirementSerializer,DomainCreateSerializer,SubcategoryCreateSerializer,ControlCreateSerializer
+    AssessmentQuestionSerializer, EvidenceRequirementSerializer,DomainCreateSerializer,SubcategoryCreateSerializer,ControlCreateSerializer,FrameworkDeepSerializer,
 )
 
 
@@ -43,7 +45,42 @@ class FrameworkViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return FrameworkBasicSerializer
+        deep = self.request.query_params.get('deep')
+        if deep in ('1', 'true', 'True'):
+            return FrameworkDeepSerializer
         return FrameworkDetailSerializer
+    
+    def get_queryset(self):
+        qs = Framework.objects.filter(is_active=True)
+
+        deep = self.request.query_params.get('deep')
+        if deep in ('1', 'true', 'True'):
+            controls_qs = (
+                Control.objects.filter(is_active=True)
+                .select_related('subcategory__category__domain__framework')
+                .prefetch_related('assessment_questions', 'evidence_requirements')
+                .order_by('subcategory_id', 'sort_order')
+            )
+            subcategories_qs = (
+                Subcategory.objects.filter(is_active=True)
+                .prefetch_related(Prefetch('controls', queryset=controls_qs))
+                .order_by('sort_order', 'name')
+            )
+            categories_qs = (
+                Category.objects.filter(is_active=True)
+                .prefetch_related(Prefetch('subcategories', queryset=subcategories_qs))
+                .order_by('sort_order', 'name')
+            )
+            domains_qs = (
+                Domain.objects.filter(is_active=True)
+                .prefetch_related(Prefetch('categories', queryset=categories_qs))
+                .order_by('sort_order', 'name')
+            )
+            return qs.prefetch_related(Prefetch('domains', queryset=domains_qs))
+
+        return qs
+
+
     
     @action(detail=True, methods=['get'])
     def domains(self, request, pk=None):
@@ -280,6 +317,22 @@ class ControlViewSet(viewsets.ModelViewSet):
     ordering_fields = ['control_code', 'title', 'sort_order', 'created_at']
     ordering = ['subcategory', 'sort_order']
 
+    def get_queryset(self):
+        # Use one optimized query for list/retrieve/search and for get_object()
+        return (
+            Control.objects.filter(is_active=True)
+            .select_related(
+                'subcategory',
+                'subcategory__category',
+                'subcategory__category__domain',
+                'subcategory__category__domain__framework',
+            )
+            .prefetch_related(
+                'assessment_questions',
+                'evidence_requirements',
+            )
+        )
+
     def get_serializer_class(self):
         if self.action == 'create':
             return ControlCreateSerializer
@@ -374,6 +427,7 @@ class ControlViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Subcategory not found'}, status=status.HTTP_404_NOT_FOUND)
         ctrl.subcategory = sub
         ctrl.save(update_fields=['subcategory', 'updated_at'])
+        ctrl.refresh_from_db()  # ← ensure relations are fresh
         return Response(self.get_serializer(ctrl).data)
 
     @action(detail=True, methods=['post'])
@@ -381,6 +435,7 @@ class ControlViewSet(viewsets.ModelViewSet):
         ctrl = self.get_object()
         ctrl.subcategory = None
         ctrl.save(update_fields=['subcategory', 'updated_at'])
+        ctrl.refresh_from_db()  # ← ensure relations are fresh
         return Response(self.get_serializer(ctrl).data)
 
 class AssessmentQuestionViewSet(viewsets.ModelViewSet):

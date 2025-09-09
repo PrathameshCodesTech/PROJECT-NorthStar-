@@ -4,9 +4,9 @@ Serializers for Company Compliance API
 
 from rest_framework import serializers
 from .models import (
-    CompanyFramework, CompanyControl, ControlAssignment,
-    AssessmentCampaign, AssessmentResponse, EvidenceDocument,
-    RemediationPlan, ComplianceReport
+    CompanyFramework, CompanyDomain, CompanyCategory, CompanySubcategory,
+    CompanyControl, ControlAssignment, AssessmentCampaign, AssessmentResponse, 
+    EvidenceDocument, RemediationPlan, ComplianceReport
 )
 
 
@@ -16,7 +16,11 @@ class CompanyFrameworkSerializer(serializers.ModelSerializer):
     control_count = serializers.SerializerMethodField()
     
     def get_control_count(self, obj):
-        return obj.controls.filter(is_active=True).count()
+        return CompanyControl.objects.filter(
+            subcategory__category__domain__framework=obj,
+            is_active=True
+        ).count()
+
     
     class Meta:
         model = CompanyFramework
@@ -27,14 +31,79 @@ class CompanyFrameworkSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'activated_date']
 
-
-class CompanyControlBasicSerializer(serializers.ModelSerializer):
-    """Basic Company Control serializer for lists"""
+class CompanyDomainSerializer(serializers.ModelSerializer):
+    """Serializer for Company Domains"""
     
     framework_name = serializers.CharField(source='framework.name', read_only=True)
+    category_count = serializers.SerializerMethodField()
+    
+    def get_category_count(self, obj):
+        return obj.categories.filter(is_active=True).count()
+    
+    class Meta:
+        model = CompanyDomain
+        fields = [
+            'id', 'framework', 'template_domain_id', 'name', 'code', 
+            'description', 'sort_order', 'is_customized', 'custom_description',
+            'framework_name', 'category_count'
+        ]
+        read_only_fields = ['id']
+
+
+class CompanyCategorySerializer(serializers.ModelSerializer):
+    """Serializer for Company Categories"""
+    
+    domain_name = serializers.CharField(source='domain.name', read_only=True)
+    subcategory_count = serializers.SerializerMethodField()
+    
+    def get_subcategory_count(self, obj):
+        return obj.subcategories.filter(is_active=True).count()
+    
+    class Meta:
+        model = CompanyCategory
+        fields = [
+            'id', 'domain', 'template_category_id', 'name', 'code', 
+            'description', 'sort_order', 'is_customized', 'custom_description',
+            'domain_name', 'subcategory_count'
+        ]
+        read_only_fields = ['id']
+
+
+class CompanySubcategorySerializer(serializers.ModelSerializer):
+    """Serializer for Company Subcategories"""
+    
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    control_count = serializers.SerializerMethodField()
+    
+    def get_control_count(self, obj):
+        return CompanyControl.objects.filter(
+            subcategory=obj,
+            is_active=True
+        ).count()
+
+    
+    class Meta:
+        model = CompanySubcategory
+        fields = [
+            'id', 'category', 'template_subcategory_id', 'name', 'code', 
+            'description', 'sort_order', 'is_customized', 'custom_description',
+            'category_name', 'control_count'
+        ]
+        read_only_fields = ['id']
+
+
+class CompanyControlBasicSerializer(serializers.ModelSerializer):
+    """Basic Company Control serializer for lists - optimized for N+1 queries"""
+    
+    framework_name = serializers.CharField(source='subcategory.category.domain.framework.name', read_only=True)
+    subcategory_name = serializers.CharField(source='subcategory.name', read_only=True)
     assignment_count = serializers.SerializerMethodField()
+
     
     def get_assignment_count(self, obj):
+        # Use prefetch_related data if available
+        if hasattr(obj, 'prefetched_assignment_count'):
+            return obj.prefetched_assignment_count
         return obj.assignments.count()
     
     class Meta:
@@ -42,6 +111,7 @@ class CompanyControlBasicSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'control_code', 'title', 'control_type',
             'frequency', 'risk_level', 'framework_name',
+            'subcategory_name',  
             'assignment_count', 'is_active'
         ]
         read_only_fields = ['id']
@@ -50,7 +120,10 @@ class CompanyControlBasicSerializer(serializers.ModelSerializer):
 class CompanyControlDetailSerializer(serializers.ModelSerializer):
     """Detailed Company Control serializer"""
     
-    framework_name = serializers.CharField(source='framework.name', read_only=True)
+    framework_name = serializers.CharField(source='subcategory.category.domain.framework.name', read_only=True)
+    domain_name = serializers.CharField(source='subcategory.category.domain.name', read_only=True)
+    category_name = serializers.CharField(source='subcategory.category.name', read_only=True)
+    subcategory_name = serializers.CharField(source='subcategory.name', read_only=True)
     assignment_count = serializers.SerializerMethodField()
     completed_assignments = serializers.SerializerMethodField()
     
@@ -78,7 +151,7 @@ class ControlAssignmentSerializer(serializers.ModelSerializer):
     
     control_code = serializers.CharField(source='control.control_code', read_only=True)
     control_title = serializers.CharField(source='control.title', read_only=True)
-    framework_name = serializers.CharField(source='control.framework.name', read_only=True)
+    framework_name = serializers.CharField(source='control.subcategory.category.domain.framework.name', read_only=True)
     
     class Meta:
         model = ControlAssignment

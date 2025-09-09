@@ -12,12 +12,14 @@ import requests
 from django.conf import settings
 
 from .models import (
-    CompanyFramework, CompanyControl, ControlAssignment,
-    AssessmentCampaign, AssessmentResponse, EvidenceDocument,
-    RemediationPlan, ComplianceReport
+    CompanyFramework, CompanyDomain, CompanyCategory, CompanySubcategory,
+    CompanyControl, ControlAssignment, AssessmentCampaign, AssessmentResponse, 
+    EvidenceDocument, RemediationPlan, ComplianceReport
 )
+
 from .serializers import (
-    CompanyFrameworkSerializer, CompanyControlBasicSerializer,
+    CompanyFrameworkSerializer, CompanyDomainSerializer, CompanyCategorySerializer,
+    CompanySubcategorySerializer, CompanyControlBasicSerializer,
     CompanyControlDetailSerializer, ControlAssignmentSerializer,
     AssessmentCampaignSerializer, AssessmentResponseSerializer,
     EvidenceDocumentSerializer, RemediationPlanSerializer,
@@ -45,7 +47,10 @@ class CompanyFrameworkViewSet(viewsets.ModelViewSet):
     def controls(self, request, pk=None):
         """Get all controls for this framework"""
         framework = self.get_object()
-        controls = framework.controls.filter(is_active=True).order_by('sort_order')
+        controls = CompanyControl.objects.filter(
+            subcategory__category__domain__framework=framework,
+            is_active=True
+        ).order_by('sort_order')
         serializer = CompanyControlBasicSerializer(controls, many=True)
         return Response(serializer.data)
     
@@ -53,7 +58,10 @@ class CompanyFrameworkViewSet(viewsets.ModelViewSet):
     def stats(self, request, pk=None):
         """Get framework statistics"""
         framework = self.get_object()
-        controls = framework.controls.filter(is_active=True)
+        controls = CompanyControl.objects.filter(
+            subcategory__category__domain__framework=framework,
+            is_active=True
+        )
         
         stats = {
             'framework_id': framework.id,
@@ -61,26 +69,95 @@ class CompanyFrameworkViewSet(viewsets.ModelViewSet):
             'total_controls': controls.count(),
             'assigned_controls': controls.filter(assignments__isnull=False).distinct().count(),
             'completed_assignments': ControlAssignment.objects.filter(
-                control__framework=framework, status='COMPLETED'
+                control__subcategory__category__domain__framework=framework, 
+                status='COMPLETED'
             ).count(),
             'pending_assignments': ControlAssignment.objects.filter(
-                control__framework=framework, status__in=['NOT_STARTED', 'IN_PROGRESS']
+                control__subcategory__category__domain__framework=framework, 
+                status__in=['NOT_STARTED', 'IN_PROGRESS']
             ).count(),
         }
         return Response(stats)
 
 
-class CompanyControlViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Company Controls
-    """
-    queryset = CompanyControl.objects.filter(is_active=True)
+
+
+class CompanyDomainViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Company Domains"""
+    queryset = CompanyDomain.objects.all()
+    serializer_class = CompanyDomainSerializer
     permission_classes = [IsTenantMember]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['framework', 'control_type', 'frequency', 'risk_level', 'is_customized']
+    filterset_fields = ['framework', 'code']
+    search_fields = ['name', 'code', 'description']
+    ordering = ['framework', 'sort_order']
+
+
+class CompanyCategoryViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Company Categories"""
+    queryset = CompanyCategory.objects.all()
+    serializer_class = CompanyCategorySerializer
+    permission_classes = [IsTenantMember]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['domain', 'code']
+    search_fields = ['name', 'code', 'description']
+    ordering = ['domain', 'sort_order']
+
+
+class CompanySubcategoryViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Company Subcategories"""
+    queryset = CompanySubcategory.objects.all()
+    serializer_class = CompanySubcategorySerializer
+    permission_classes = [IsTenantMember]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['category', 'code']
+    search_fields = ['name', 'code', 'description']
+    ordering = ['category', 'sort_order']
+
+def validate_employee_ids(assigned_to_id, assigned_by_id):
+    """Validate employee IDs exist and are valid"""
+    errors = []
+    
+    # Validate assigned_to_employee_id
+    if not assigned_to_id:
+        errors.append('assigned_to_employee_id is required')
+    elif not isinstance(assigned_to_id, int) or assigned_to_id <= 0:
+        errors.append('assigned_to_employee_id must be a positive integer')
+    
+    # Validate assigned_by_employee_id  
+    if not assigned_by_id:
+        errors.append('assigned_by_employee_id is required')
+    elif not isinstance(assigned_by_id, int) or assigned_by_id <= 0:
+        errors.append('assigned_by_employee_id must be a positive integer')
+    
+    # In production, you'd validate against actual employee database
+    # For now, just check they're different
+    if assigned_to_id == assigned_by_id:
+        errors.append('Cannot assign control to yourself')
+    
+    return errors
+
+
+
+class CompanyControlViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Company Controls - optimized queries
+    """
+    permission_classes = [IsTenantMember]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['subcategory', 'control_type', 'frequency', 'risk_level', 'is_customized']
     search_fields = ['control_code', 'title', 'description', 'objective']
     ordering_fields = ['control_code', 'title', 'sort_order']
-    ordering = ['framework', 'sort_order']
+    ordering = ['subcategory', 'sort_order']
+    
+    def get_queryset(self):
+        """Optimized queryset with proper joins to avoid N+1 queries"""
+        return CompanyControl.objects.filter(is_active=True).select_related(
+            'subcategory',
+            'subcategory__category', 
+            'subcategory__category__domain',
+            'subcategory__category__domain__framework'
+        ).prefetch_related('assignments')
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -97,8 +174,20 @@ class CompanyControlViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):
-        """Assign this control to an employee"""
+        """Assign this control to an employee with validation"""
         control = self.get_object()
+        
+        assigned_to_id = request.data.get('assigned_to_employee_id')
+        assigned_by_id = request.data.get('assigned_by_employee_id')
+        
+        # Validate employee IDs
+        validation_errors = validate_employee_ids(assigned_to_id, assigned_by_id)
+        if validation_errors:
+            return Response({
+                'success': False,
+                'errors': validation_errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         data = request.data.copy()
         data['control'] = control.id
         
@@ -255,91 +344,106 @@ class ComplianceReportViewSet(viewsets.ModelViewSet):
     ordering = ['-generated_date']
 
 
-def create_isolated_user(self, data, tenant_slug):
-    """Create user in tenant database for isolated mode"""
-    try:
-        from .models import TenantUser
-        from django.contrib.auth.hashers import make_password
-        from template_service.database_router import set_current_tenant, clear_current_tenant
-        
-        username = data.get('username')
-        email = data.get('email')
-        password = data.get('password')
-        role = data.get('role', 'EMPLOYEE')
-        
-        if not all([username, email, password]):
-            return Response({'error': 'Missing required fields'}, status=400)
-        
-        # Set tenant context for database routing
-        set_current_tenant(tenant_slug)
-        
-        try:
-            # Check if user already exists in tenant database
-            if TenantUser.objects.filter(username=username).exists():
-                return Response({'error': 'Username already exists'}, status=400)
-            
-            if TenantUser.objects.filter(email=email).exists():
-                return Response({'error': 'Email already exists'}, status=400)
-            
-            # Create tenant user
-            tenant_user = TenantUser.objects.create(
-                username=username,
-                email=email,
-                password_hash=make_password(password),
-                role=role,
-                is_active=True
-            )
-            
-            return Response({
-                'success': True,
-                'user': {
-                    'id': str(tenant_user.id),
-                    'username': tenant_user.username,
-                    'email': tenant_user.email,
-                    'role': tenant_user.role,
-                    'tenant_slug': tenant_slug
-                }
-            }, status=201)
-            
-        finally:
-            clear_current_tenant()
-            
-    except Exception as e:
-        return Response({'error': str(e)}, status=500)
-
-def get_tenant_info(self, tenant_slug):
-    """Get tenant information from Service 2"""
-    try:
-        response = requests.get(
-            f'{settings.SERVICE2_URL}/api/v2/internal/tenants/{tenant_slug}/residency/',
-            headers={'X-Internal-Token': settings.SERVICE_TO_SERVICE_TOKEN},
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            return response.json()
-        return None
-    except Exception:
-        return None
-
 class TenantUserViewSet(viewsets.ViewSet):
     """Handle user creation for ISOLATED mode"""
     permission_classes = [IsTenantMember, CanCreateUsers]
     
+    def create_isolated_user(self, data, tenant_slug):
+        """Create user in tenant database for isolated mode"""
+        try:
+            from .models import TenantUser
+            from django.contrib.auth.hashers import make_password
+            from template_service.database_router import set_current_tenant, clear_current_tenant
+            
+            username = data.get('username')
+            email = data.get('email')
+            password = data.get('password')
+            role = data.get('role', 'EMPLOYEE')
+            
+            if not all([username, email, password]):
+                return Response({'error': 'Missing required fields'}, status=400)
+            
+            # Role validation - superusers can create any role
+
+            print(f"DEBUG: User: {self.request.user}")
+            print(f"DEBUG: Is superuser: {self.request.user.is_superuser}")
+            print(f"DEBUG: Requested role: {role}")
+            if not self.request.user.is_superuser:
+                creator_role = 'TENANT_ADMIN'
+                if not validate_role_creation(creator_role, role):
+                    return Response({'error': f'Cannot assign role {role}'}, status=403)
+            
+            else:
+                print("DEBUG: Superuser detected, skipping role validation")
+            # Set tenant context for database routing
+            set_current_tenant(tenant_slug)
+            
+            try:
+                # Check if user already exists in tenant database
+                if TenantUser.objects.filter(username=username).exists():
+                    return Response({'error': 'Username already exists'}, status=400)
+                
+                if TenantUser.objects.filter(email=email).exists():
+                    return Response({'error': 'Email already exists'}, status=400)
+                
+                # Create tenant user
+                tenant_user = TenantUser.objects.create(
+                    username=username,
+                    email=email,
+                    password_hash=make_password(password),
+                    role=role,
+                    is_active=True
+                )
+                
+                return Response({
+                    'success': True,
+                    'user': {
+                        'id': str(tenant_user.id),
+                        'username': tenant_user.username,
+                        'email': tenant_user.email,
+                        'role': tenant_user.role,
+                        'tenant_slug': tenant_slug
+                    }
+                }, status=201)
+                
+            finally:
+                clear_current_tenant()
+                
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+    def get_tenant_info(self, tenant_slug):
+        """Get tenant information from Service 2"""
+        try:
+            response = requests.get(
+                f'{settings.SERVICE2_URL}/api/v2/internal/tenants/{tenant_slug}/residency/',
+                headers={'X-Internal-Token': settings.SERVICE_TO_SERVICE_TOKEN},
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception:
+            return None
+
+
     def create(self, request):
         """Create user in isolated tenant database"""
-        tenant_slug = get_current_tenant()
+        tenant_slug = get_current_tenant() or request.data.get('tenant_slug')
         
         # Verify tenant uses isolated mode
         tenant_info = self.get_tenant_info(tenant_slug)
-        if tenant_info.get('user_data_residency') != 'ISOLATED':
+        if not tenant_info or tenant_info.get('user_data_residency') != 'ISOLATED':
             return Response({'error': 'This tenant uses centralized user management'}, status=400)
         
         # Validate role assignment
-        creator_role = request.tenant_membership.get('role')
-        target_role = request.data.get('role', 'EMPLOYEE')
-        
-        if not validate_role_creation(creator_role, target_role):
-            return Response({'error': f'Cannot assign role {target_role}'}, status=403)
-        
+        # Validate role assignment - superusers can create any role
+        if not request.user.is_superuser:
+            creator_role = getattr(request, 'tenant_membership', {}).get('role')
+            target_role = request.data.get('role', 'EMPLOYEE')
+            
+            if not validate_role_creation(creator_role, target_role):
+                return Response({'error': f'Cannot assign role {target_role}'}, status=403)
+                    
         return self.create_isolated_user(request.data, tenant_slug)

@@ -7,9 +7,10 @@ from decouple import config
 
 
 
-INTERNAL_REGISTER_DB_TOKEN = config('INTERNAL_REGISTER_DB_TOKEN', default=None)
+SERVICE_TO_SERVICE_TOKEN = config('SERVICE_TO_SERVICE_TOKEN', default='internal-service-secret-token-123')
 SERVICE1_URL = config('SERVICE1_URL', default='http://localhost:8000')
 SERVICE2_URL = config('SERVICE2_URL', default='http://localhost:8001')
+INTERNAL_REGISTER_DB_TOKEN = SERVICE_TO_SERVICE_TOKEN
 
 
 
@@ -51,6 +52,9 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'template_service.database_router.TenantMiddleware',  # ADD THIS LINE
+    'template_service.middleware.PerformanceMiddleware',  # Add performance tracking
+    'template_service.middleware.RateLimitMiddleware',  # Add rate limiting
+    'template_service.middleware.TenantCacheMiddleware', 
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -126,12 +130,25 @@ STATIC_URL = '/static/'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'template-service-cache',
+        'TIMEOUT': 300,  # 5 minutes default timeout
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+            'CULL_FREQUENCY': 3,
+        }
+    }
+}
+
 # Django REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'template_service.authentication.CrossServiceJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
@@ -150,13 +167,14 @@ REST_FRAMEWORK = {
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
-    "REFRESH_TOKEN_LIFETIME": timedelta(hours=24),
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
+    "REFRESH_TOKEN_LIFETIME":  timedelta(days=30),
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": False,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": config("JWT_SIGNING_KEY", default="dev-only-change-me"),
     "AUTH_HEADER_TYPES": ("Bearer",),
+    "VERIFYING_KEY": None,  # Use SIGNING_KEY for verification
 }
 
 SERVICE_TO_SERVICE_TOKEN = config('SERVICE_TO_SERVICE_TOKEN', default='internal-service-secret-token-123')
@@ -166,7 +184,11 @@ CORS_ALLOWED_ORIGINS = [
     "https://app.yourdomain.com",
     "https://staging.yourdomain.com",
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    
+    "http://192.168.29.247:5173",   # friend’s frontend (Vite dev)
+    "http://192.168.29.247:3000",   # if CRA dev
 ]
 CSRF_TRUSTED_ORIGINS = [
     "https://app.yourdomain.com",
